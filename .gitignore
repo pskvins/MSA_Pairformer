@@ -38,3 +38,6 @@ coverage.xml
 *.cover
 .hypothesis/
 .pytest_cache/
+
+pretrained
+tmp*
