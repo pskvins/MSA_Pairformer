@@ -81,5 +81,6 @@ class RelativePositionEncoding(Module):
         a_rel_chain = onehot(d_chain, s_arange)
         # Concatenate tensors and project
         out, _ = pack((a_rel_pos, a_rel_token, mask_same_entity, a_rel_chain), 'b i j *')
+        out = out.to(self.out_embedder.weight.dtype)
         
         return self.out_embedder(out)

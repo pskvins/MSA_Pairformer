@@ -128,6 +128,9 @@ class MSA:
         assert self.diverse_select_method in ["greedy", "hhfilter", "none"], "Diverse select method must be either 'greedy' or 'hhfilter', or 'none' if no diverse selection is desired"
         assert self.secondary_filter_method in ["greedy", "random", "none"], "Secondary filter method must be either 'greedy' or 'random', or 'none' if no secondary filter is desired"
 
+        # Map AUCG- to KDNY-, otherwise X
+        self.rna2prot = {'A': 'K', 'U': 'D', 'C': 'N', 'G': 'Y', '-': '-'}
+
         # Parse MSA file
         self.seq_l, self.ids_l = self.parse_a3m_file(**parser_kwargs)
         self.seq_a = self.seq_list_to_arr(self.seq_l)
@@ -212,6 +215,8 @@ class MSA:
                 sequence = re.sub(r"[a-z]|\.|\*", "", sequence)
             if to_upper:
                 sequence = sequence.upper()
+            # Map AUCG- to KDNY-, otherwise X
+            sequence = "".join([self.rna2prot.get(nuc, 'X') for nuc in sequence])
             seq_l.append(sequence)
             ids_l.append(record.name)
         return seq_l, ids_l
@@ -365,9 +370,10 @@ class MSADataset(Dataset):
         self.random_query = random_query
         self.min_query_coverage = min_query_coverage
         if msa_paths is None:
-            self.msa_paths = glob(os.path.join(msa_dir, "*/a3m/*.a3m"))
+            self.msa_paths = glob(os.path.join(msa_dir, "*.a3m"))
         else:
             self.msa_paths = msa_paths
+        print(f"Found {len(self.msa_paths)} MSA files in {self.msa_dir if msa_dir is not None else 'provided paths'}")
         
     def __len__(self):
         return len(self.msa_paths)
@@ -407,6 +413,7 @@ def msa_mlm(
     mutate_tok_high: int = 19,
     query_only: bool = False
 ):
+    random_tokens = [2, 3, 11, 18]
     # Create masked input (don't mask padding tokens)
     masked_msas = msa_t.clone()
     flat_msas = masked_msas.view(-1)
@@ -444,7 +451,11 @@ def msa_mlm(
         # Apply mutations
         masked_msas.view(-1)[mutate_indices] = new_toks_t
     else:
-        masked_msas.view(-1)[mutate_indices] = torch.randint_like(input = masked_msas.view(-1)[mutate_indices], low=mutate_tok_low, high=mutate_tok_high+1)
+        # masked_msas.view(-1)[mutate_indices] = torch.randint_like(input = masked_msas.view(-1)[mutate_indices], low=mutate_tok_low, high=mutate_tok_high+1)
+        # Random integer tensor composed of values in `random_tokens`
+        random_tensor = torch.randint_like(input = masked_msas.view(-1)[mutate_indices], low=0, high=len(random_tokens))
+        random_toks = torch.tensor(random_tokens)[random_tensor]
+        masked_msas.view(-1)[mutate_indices] = random_toks
 
     # Return masked MSA and indices of tokens to predict
     return masked_msas, mlm_indices

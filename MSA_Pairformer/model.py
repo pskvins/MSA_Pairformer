@@ -341,7 +341,7 @@ class MSAPairformer(Module):
     ):
         if device is None:
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        path = Path(snapshot_download(repo_id="pskvins/MSA-Pairformer", cache_dir=weights_dir))
+        path = Path(snapshot_download(repo_id="yakiyama/MSA-Pairformer", cache_dir=weights_dir))
         checkpoint = torch.load(path / "model.bin", weights_only=True, map_location=device)
         confind_contact_checkpoint = torch.load(path / "confind_contact.bin", weights_only=True, map_location=device)
         cb_contact_checkpoint = torch.load(path / "contact.bin", weights_only=True, map_location=device)
@@ -368,7 +368,7 @@ class MSAPairformer(Module):
         )
         seq_arange = torch.arange(seq_len, device = msa.device)
         token_bonds = einx.subtract('i, j -> i j', seq_arange, seq_arange).abs() == 1
-        token_bonds_feats = self.token_bond_to_pairwise_feat(token_bonds.float())
+        token_bonds_feats = self.token_bond_to_pairwise_feat(token_bonds.to(pairwise_repr.dtype))
         pairwise_repr = pairwise_repr + token_bonds_feats
 
         # Initialize MSA representation

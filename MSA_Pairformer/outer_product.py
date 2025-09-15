@@ -197,7 +197,7 @@ class PresoftmaxDifferentialOuterProductMean(Module):
     def _opm(self, a, b):
         outer = torch.einsum("...bac,...dae->...bdce", a, b)
         outer = outer.reshape(outer.shape[:-2] + (-1,))
-        outer = self.to_pairwise_repr(outer)
+        outer = self.to_pairwise_repr(outer.to(self.to_pairwise_repr.weight.dtype))
         outer = self.activation(outer)
         return outer
 
