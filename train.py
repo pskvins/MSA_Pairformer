@@ -1,7 +1,7 @@
 import torch
 from torch.optim import AdamW
 from deepspeed.ops.adam import DeepSpeedCPUAdam
-# from lightning.pytorch.strategies import DeepSpeedStrategy
+from lightning.pytorch.strategies import DeepSpeedStrategy
 import argparse
 import numpy as np
 from MSA_Pairformer.model import MSAPairformer
@@ -12,11 +12,14 @@ from lightning.pytorch.loggers import CSVLogger
 
 # Lightning model
 class LitMSAPairformer(L.LightningModule):
-    def __init__(self, device, weights_dir):
+    def __init__(self, weights_dir):
         super().__init__()
-        self.model = MSAPairformer.from_pretrained(device=device, weights_dir=weights_dir)
-        self.device_ = device
+        self.model = MSAPairformer.from_pretrained(weights_dir=weights_dir)
+        self.weights_dir = weights_dir
         self.loss_fn = torch.nn.CrossEntropyLoss()
+
+    # def configure_model(self):
+    #     self.model = MSAPairformer.from_pretrained(weights_dir=self.weights_dir)
 
     def forward(self, msa, mask, msa_mask, full_mask, pairwise_mask):
         return self.model(
@@ -70,19 +73,19 @@ print(f"Using device: {torch.cuda.get_device_name(device)}")
 # Download model weights and load model
 # As long as the cache doesn't get cleared, you won't need to re-download the weights whenever you re-run this
 # model = MSAPairformer.from_pretrained(device=device, weights_dir="pretrained")
-model = LitMSAPairformer(device=device, weights_dir="pretrained")
+model = LitMSAPairformer(weights_dir="pretrained")
 print("Model loaded")
 
 # Subsample MSA using hhfilter and greedy diversification
 np.random.seed(args.seed)
 torch.manual_seed(args.seed)
 # Should map AUCG to KDNY
-train_dataset = MSADataset(msa_dir=args.train_msa, max_msa_depth=64, max_seq_length=256, max_tokens=2**17)
-val_dataset = MSADataset(msa_dir=args.val_msa, max_msa_depth=64, max_seq_length=256, max_tokens=2**17)
+train_dataset = MSADataset(msa_dir=args.train_msa, max_msa_depth=64, max_seq_length=1024, max_tokens=2**17)
+val_dataset = MSADataset(msa_dir=args.val_msa, max_msa_depth=64, max_seq_length=1024, max_tokens=2**17)
 
 collate_fn_train = CollateAFBatch(
     max_seq_depth = 64,
-    max_seq_length = 256,
+    max_seq_length = 1024,
     min_seq_depth = 50,
     query_only = False,
     mask_prob = 0.15,
@@ -93,7 +96,7 @@ collate_fn_train = CollateAFBatch(
 )
 collate_fn_test = CollateAFBatch(
     max_seq_depth = 64,
-    max_seq_length = 256,
+    max_seq_length = 1024,
     min_seq_depth = 50,
     query_only = False,
     mask_prob = 0.15,
@@ -109,43 +112,24 @@ val_dataloader = torch.utils.data.DataLoader(val_dataset, batch_size=args.batch_
 torch.set_float32_matmul_precision('high')
 
 # Train
-# optimizer = AdamW(model.parameters(), lr=8e-4)
-
-# model.train()
-# loss_fn = torch.nn.CrossEntropyLoss()
-# with open("loss.txt", "w") as f:
-#     for batch in pbar:
-#         if batch is not None:
-#             msa = torch.nn.functional.one_hot(torch.tensor(batch['msas']), num_classes=28).float().to(device) # (b, s, n, 28), 28 is alphabet size
-#             results = model(
-#                 msa = msa, # (b, s, n, 26)
-#                 mask = torch.tensor(batch['mask'], device=device), # (b, s, n)
-#                 msa_mask = torch.tensor(batch['msa_mask'], device=device), # (b*s*n,)
-#                 full_mask = torch.tensor(batch['full_mask'], device=device), # (b, s, n)
-#                 pairwise_mask = torch.tensor(batch['pairwise_mask'], device=device), # (b, n, n)
-#                 return_contacts = False
-#             )
-#             logits = results['logits'].contiguous().view(-1, 26) # (b*s*n, 26)
-#             target = batch['unmasked_msas_onehot'].view(-1)[batch['masked_idx']] # one-hot
-#             loss = loss_fn(logits, target)
-#             optimizer.zero_grad()
-#             loss.backward()
-#             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
-#             optimizer.step()
-#             pbar.set_postfix(f"Training loss: {loss.item():.4f}")
-#             f.write(f"{loss.item():.4f}\n")
-#             print()
-
 max_norm = 1.0
 trainer = Trainer(
     max_epochs=10,
     gradient_clip_val=max_norm,
     devices=num_gpus if is_gpu else None,
     accelerator="gpu" if is_gpu else "cpu",
-    strategy="deepspeed_stage_2_offload" if is_gpu else None,
     precision="bf16-mixed" if is_gpu else 32,
     log_every_n_steps=1,
-    logger=CSVLogger(save_dir="logs/", name="msa_pairformer")
+    logger=CSVLogger(save_dir="logs/", name="msa_pairformer"),
+    enable_model_summary=False,
+    strategy=DeepSpeedStrategy(
+        stage=3,
+        offload_optimizer=True,
+        offload_parameters=True,
+        cpu_checkpointing=True,
+    )
 )
+
+model.configure_model()
 
 trainer.fit(model, train_dataloaders=train_dataloader)

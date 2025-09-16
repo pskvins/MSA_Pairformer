@@ -16,6 +16,8 @@ from MSA_Pairformer.pairwise_operations import MSAPairWeightedAveraging, Pairwis
 from MSA_Pairformer.positional_encoding import RelativePositionEncoding
 from MSA_Pairformer.custom_typing import Float, Bool
 
+import deepspeed
+
 class CoreModule(Module):
     """
     Core module for MSA Pairformer which includes stacked layers of:
@@ -173,7 +175,9 @@ class CoreModule(Module):
             pairwise_block
         ) in enumerate(self.layers):
             # Pair weighted averaging (with residual connection)
-            msa_residual = msa_pair_weighted_avg(msa = msa, pairwise_repr = pairwise_repr, mask = mask)
+            # msa_residual = msa_pair_weighted_avg(msa = msa, pairwise_repr = pairwise_repr, mask = mask)
+            wrapped_msa_pair_weighted_avg = partial(msa_pair_weighted_avg, msa=msa, pairwise_repr=pairwise_repr, mask=mask)
+            msa_residual = deepspeed.checkpointing.checkpoint(wrapped_msa_pair_weighted_avg)
             msa = msa + msa_residual
             msa = msa + msa_transition(msa)
             if layer_idx in return_msa_repr_layer_idx:
@@ -188,13 +192,17 @@ class CoreModule(Module):
             elif seq_weights is not None:
                 curr_seq_weights = seq_weights
 
-            update_pairwise_repr, norm_weights = outer_product(
-                msa = msa,
-                mask = mask,
-                msa_mask = msa_mask,
-                full_mask = full_mask,
-                pairwise_mask = pairwise_mask,
-                seq_weights = curr_seq_weights
+            # update_pairwise_repr, norm_weights = outer_product(
+            #     msa = msa,
+            #     mask = mask,
+            #     msa_mask = msa_mask,
+            #     seq_weights = curr_seq_weights
+            #     full_mask = full_mask,
+            #     pairwise_mask = pairwise_mask,
+            # )
+            wrapped_outer_product = partial(outer_product, msa=msa, mask=mask, msa_mask=msa_mask, seq_weights=curr_seq_weights, full_mask=full_mask, pairwise_mask=pairwise_mask)
+            update_pairwise_repr, norm_weights = deepspeed.checkpointing.checkpoint(
+                wrapped_outer_product
             )
             pairwise_repr = pairwise_repr + update_pairwise_repr
             del update_pairwise_repr
@@ -202,7 +210,9 @@ class CoreModule(Module):
                 seq_weights_list_d[f"layer_{layer_idx}"] = norm_weights.cpu()
 
             # Pairwise representation block
-            pairwise_repr = pairwise_block(pairwise_repr = pairwise_repr, mask = mask)
+            # pairwise_repr = pairwise_block(pairwise_repr = pairwise_repr, mask = mask)
+            wrapped_pairwise_block = partial(pairwise_block, pairwise_repr=pairwise_repr, mask=mask)
+            pairwise_repr = deepspeed.checkpointing.checkpoint(wrapped_pairwise_block)
             if layer_idx in return_pairwise_repr_layer_idx:
                 pairwise_repr_d[f"layer_{layer_idx}"] = pairwise_repr.cpu()
 
@@ -339,17 +349,15 @@ class MSAPairformer(Module):
         device: torch.device | None = None,
         weights_dir: str | None = None,
     ):
-        if device is None:
-            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         path = Path(snapshot_download(repo_id="yakiyama/MSA-Pairformer", cache_dir=weights_dir))
-        checkpoint = torch.load(path / "model.bin", weights_only=True, map_location=device)
-        confind_contact_checkpoint = torch.load(path / "confind_contact.bin", weights_only=True, map_location=device)
-        cb_contact_checkpoint = torch.load(path / "contact.bin", weights_only=True, map_location=device)
+        checkpoint = torch.load(path / "model.bin", weights_only=True, map_location="cpu") #, map_location=device)
+        confind_contact_checkpoint = torch.load(path / "confind_contact.bin", weights_only=True, map_location="cpu") #, map_location=device)
+        cb_contact_checkpoint = torch.load(path / "contact.bin", weights_only=True, map_location="cpu") #, map_location=device)
         checkpoint.update(confind_contact_checkpoint)
         checkpoint.update(cb_contact_checkpoint)
         model = cls()
         model.load_state_dict(checkpoint)
-        model.to(device)
+        # model.to(device)
         return model
 
     ###### Embed sequences ######
